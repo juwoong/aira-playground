@@ -33,6 +33,14 @@ class TextSpec:
     subtitle_font: FontSpec
 
 
+@dataclass
+class TextBlock:
+    text: str
+    font: FontSpec
+    box: Tuple[int, int, int, int]
+    fill: Optional[Tuple[int, int, int]] = None
+
+
 def create_card(
     title: str,
     subtitle: str,
@@ -40,13 +48,18 @@ def create_card(
     background_path: Optional[str],
     fonts: Tuple[FontSpec, FontSpec],
     options: RenderOptions,
+    background_image: Optional[Image.Image] = None,
 ) -> Image.Image:
     """Create a composed card image."""
-    background = (
-        load_background(background_path, (options.width, options.height))
-        if background_path
-        else generate_prompt_gradient(prompt, (options.width, options.height))
-    )
+    target = min(options.width, options.height)
+    target_size = (target, target)
+
+    if background_image is not None:
+        background = ensure_square(background_image).resize(target_size, Image.LANCZOS)
+    elif background_path:
+        background = load_background(background_path, target_size)
+    else:
+        background = generate_prompt_gradient(prompt, target_size)
 
     background = background.convert("RGBA")
 
@@ -82,10 +95,41 @@ def create_card(
     return canvas.convert("RGB")
 
 
+def draw_text_blocks(
+    image: Image.Image,
+    blocks: Sequence[TextBlock],
+    *,
+    shadow: bool = True,
+    default_fill: Optional[Tuple[int, int, int]] = None,
+) -> Image.Image:
+    """Render multiple text blocks onto a copy of the image."""
+
+    canvas = image.copy()
+    draw = ImageDraw.Draw(canvas)
+
+    for block in blocks:
+        if not block.text:
+            continue
+
+        font = load_font(block.font)
+        fill = block.fill or default_fill or pick_text_color(canvas)
+
+        _draw_text_block(
+            draw,
+            block.text,
+            font,
+            box=block.box,
+            fill=fill,
+            shadow=shadow,
+        )
+
+    return canvas
+
+
 def load_background(path: str, size: Tuple[int, int]) -> Image.Image:
     """Load a background image from disk and resize it."""
     image = Image.open(path)
-    image = image.convert("RGB")
+    image = ensure_square(image.convert("RGB"))
     return image.resize(size, Image.LANCZOS)
 
 
@@ -262,12 +306,29 @@ def _shadow_color(color: Tuple[int, int, int]) -> Tuple[int, int, int, int]:
     return (max(0, r - 120), max(0, g - 120), max(0, b - 120), 180)
 
 
+def ensure_square(image: Image.Image) -> Image.Image:
+    """Crop the image to a centered square."""
+    width, height = image.size
+    if width == height:
+        return image
+    edge = min(width, height)
+    left = (width - edge) // 2
+    top = (height - edge) // 2
+    right = left + edge
+    bottom = top + edge
+    return image.crop((left, top, right, bottom))
+
+
 __all__ = [
     "FontSpec",
     "RenderOptions",
     "TextSpec",
+    "TextBlock",
     "create_card",
+    "draw_text_blocks",
     "generate_prompt_gradient",
     "load_background",
     "wrap_text",
+    "ensure_square",
+    "pick_text_color",
 ]

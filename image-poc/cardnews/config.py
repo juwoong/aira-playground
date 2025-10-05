@@ -22,6 +22,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "path": "Pretendard-Regular.otf",
             "size": 42,
         },
+        "business": {
+            "path": "Pretendard-Regular.otf",
+            "size": 36,
+        },
     },
     "image": {
         "width": 1080,
@@ -29,7 +33,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "overlay": True,
     },
     "gemini": {
-        "model": "models/gemini-1.5-pro",
+        "model": "gemini-2.0-flash",
+        "image_model": "gemini-2.5-flash-image",
+    },
+    "figma": {
+        "file_key": "",
+        "frame_id": "",
+        "nodes": {
+            "title": "",
+            "subtitle": "",
+            "business": "",
+        },
+        "scale": 1.0,
+        "format": "png",
     },
 }
 
