@@ -37,24 +37,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "model": "nanobanana",
         "image_model": "nanobanana-image",
     },
-    "figma": {
-        "file_key": "",
-        "frame_id": "",
-        "nodes": {
-            "title": "",
-            "subtitle": "",
-            "business": "",
-        },
-        "names": {
-            "title": "",
-            "subtitle": "",
-            "business": "",
-        },
-        "background_nodes": [],
-        "background_names": [],
-        "scale": 1.0,
-        "format": "png",
-        "clear_background": False,
+    "brand_card": {
+        "overlay": True,
+        "overlay_alpha": 48,
+        "shadow": False,
+        "fonts": {},
     },
 }
 

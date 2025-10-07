@@ -25,15 +25,14 @@ uv run cardnews create \
 uv run cardnews create --input card.json --output result.jpg
 uv run cardnews batch --input cards.csv --output-dir ./output
 
-# Figma 템플릿 기반 생성
-uv run cardnews figma \
-  --title "오늘의 명언" \
-  --subtitle "성공을 위한 첫 걸음" \
-  --business-name "나노바나나" \
-  --image-prompt "따뜻한 아침 햇살" \
-  --figma-file-key YOUR_FIGMA_FILE_KEY \
-  --figma-frame-id 123:456 \
-  --figma-title-node 123:789
+# 브랜드 카드 템플릿 (512x512)
+uv run cardnews brand-card \
+  --brand-text "브랜드 제목" \
+  --title "타이틀 글씨 01" \
+  --subtitle "서브타이틀 글씨 01" \
+  --footer-text "TEAM AIRA" \
+  --background-path ./assets/background.png \
+  --output ./output/brand.png
 
 # Gemini로 콘텐츠 생성 (GEMINI_API_KEY 필요)
 export GEMINI_API_KEY="YOUR_KEY"
@@ -64,38 +63,35 @@ uv run cardnews config --set font-title-size 80
 - `GEMINI_API_KEY` 환경 변수(또는 동일한 값을 담은 `.env`)을 설정하면 Google Gemini API를 사용해 카드 콘텐츠와 Nanobanana 배경 이미지를 생성합니다.
 - 키가 없을 경우, 텍스트는 기본 템플릿, 배경은 그라데이션으로 대체됩니다.
 
-## Figma 통합
+## 브랜드 카드 템플릿
 
-- `FIGMA_API_KEY` 환경 변수를 설정하면 Figma API를 통해 지정한 프레임을 렌더링하고, 텍스트 영역 좌표를 자동으로 불러옵니다. (기존 `FIGMA_ACCESS_TOKEN`도 하위 호환용으로 인식됩니다.)
-- `cardnews figma` 명령은 기본 설정(`figma.file_key`, `figma.frame_id`, `figma.nodes.*`/`figma.names.*`)을 활용하며, 필요 시 CLI 옵션으로 덮어쓸 수 있습니다.
-- 상호명(`--business-name`) 입력을 지원하며, 배경 이미지 프롬프트에는 기본적으로 `실사스러운 이미지를 생성` 요구사항이 자동으로 추가됩니다.
-- Gemini 통합 모델 기본값은 `nanobanana`(텍스트)와 `nanobanana-image`(이미지)이며, 내부적으로 Google Gemini 모델로 매핑됩니다.
-
-### 설정 방법 요약
-
-1. **Figma Personal Access Token 발급** → Figma 웹 앱에서 `Settings > Account > Personal access tokens`로 이동해 새 토큰을 만들고 `FIGMA_API_KEY` 환경 변수에 저장합니다.
-2. **파일 키 확인** → Figma 파일 URL의 `/file/<FILE_KEY>/` 부분에서 `<FILE_KEY>`를 복사해 `figma.file_key`에 입력합니다.
-3. **프레임 ID 확보** → 템플릿으로 사용할 프레임을 선택한 뒤 `Share > Copy link`를 사용하면 URL 끝의 `?node-id=<FRAME_ID>` 값을 얻을 수 있습니다.
-4. **텍스트 슬롯 지정** → 레이어 ID를 알고 있다면 `Copy link`의 `node-id`를 `figma.nodes.*`에 입력하고, 어렵다면 프레임 안에서 보이는 레이어 이름을 `figma.names.*`에 그대로 적으면 됩니다. 이름과 ID 중 하나만 있어도 동작합니다.
-5. **설정 저장** → 루트의 `config.yaml`에 아래와 같은 섹션을 추가하거나 `cardnews config --set figma-title-name "타이틀"`처럼 명령으로 값을 등록합니다.
+- `cardnews brand-card` 명령은 512x512 정사각형 레이아웃을 생성합니다.
+- 배경 이미지는 자동으로 중앙 크롭 뒤 리사이즈되며, 필요 시 투명한 흰색 오버레이(기본 alpha 48)로 밝기를 맞춥니다.
+- 상단 오른쪽에는 브랜드 텍스트, 왼쪽 하단에는 타이틀/서브타이틀, 오른쪽 하단에는 추가 문구를 배치합니다.
+- `--input card.json` 옵션으로 JSON 파일을 읽어 동일한 키(`brand_text`, `title`, `subtitle`, `footer_text`, `background_path`, `output`)를 활용할 수 있습니다.
+- `config.yaml`의 `brand_card` 섹션으로 기본 오버레이/그림자 여부와 폰트를 조정할 수 있습니다.
 
 ```yaml
-figma:
-  file_key: "ABC123xyz"
-  frame_id: "12:345"
-  nodes:
-    title: "34:567"
-    subtitle: "34:890"
-    business: "34:901"
-  names:
-    title: "메인 타이틀"
-    subtitle: "서브텍스트"
-    business: "브랜드명"
-  scale: 1.5 # 선택 사항: Figma 렌더링 배율
-  format: "png"
+brand_card:
+  overlay: true           # false로 두면 기본적으로 오버레이를 끄고 시작합니다.
+  overlay_alpha: 48       # 명령 인자를 주지 않았을 때 사용할 투명도 (0~255)
+  shadow: false           # true로 두면 기본값이 그림자 포함으로 바뀝니다.
+  fonts:
+    brand:
+      path: Pretendard-Regular.otf
+      size: 24
+    title:
+      path: Pretendard-Bold.otf
+      size: 72
+    subtitle:
+      path: Pretendard-Regular.otf
+      size: 42
+    footer:
+      path: Pretendard-Regular.otf
+      size: 28
 ```
 
-필요 시 `cardnews figma --figma-file-key ...` 형식으로 CLI 옵션을 사용해 개별 실행마다 값을 덮어쓸 수도 있습니다.
+설정에 값을 넣지 않으면 내부 기본값(캔버스 크기에 비례하는 크기)이 사용됩니다.
 
 ## 요구 사항
 

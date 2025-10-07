@@ -20,21 +20,20 @@ gemini:
   model: gemini-2.5-flash
   image_model: gemini-2.5-flash-image
 
-figma:
-  file_key: YOUR_FIGMA_FILE_KEY
-  frame_id: YOUR_FIGMA_FRAME_ID
-  nodes:
-    title: YOUR_TITLE_NODE_ID
-    subtitle: YOUR_SUBTITLE_NODE_ID
-    business: YOUR_BUSINESS_NODE_ID
-  names:
-    title: "타이틀 레이어 이름"
-    subtitle: "서브타이틀 레이어 이름"
-    business: "상호명 레이어 이름"
-  background_nodes:
-    - YOUR_BACKGROUND_NODE_ID
-  background_names:
-    - "백그라운드 레이어 이름"
-  scale: 1.0
-  format: png
-  clear_background: false
+brand_card:
+  overlay: true
+  overlay_alpha: 48
+  shadow: false
+  fonts:
+    brand:
+      path: Pretendard-Regular.otf
+      size: 24
+    title:
+      path: Pretendard-Bold.otf
+      size: 72
+    subtitle:
+      path: Pretendard-Regular.otf
+      size: 42
+    footer:
+      path: Pretendard-Regular.otf
+      size: 28

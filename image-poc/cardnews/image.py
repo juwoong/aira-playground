@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -39,6 +39,16 @@ class TextBlock:
     font: FontSpec
     box: Tuple[int, int, int, int]
     fill: Optional[Tuple[int, int, int]] = None
+
+
+def _default_brand_card_fonts(size: int) -> Dict[str, FontSpec]:
+    """Return default font specs scaled for the brand card layout."""
+    return {
+        "brand": FontSpec(path=None, size=max(18, size // 24)),
+        "title": FontSpec(path=None, size=max(36, size // 9)),
+        "subtitle": FontSpec(path=None, size=max(20, size // 16)),
+        "footer": FontSpec(path=None, size=max(18, size // 20)),
+    }
 
 
 def create_card(
@@ -91,6 +101,154 @@ def create_card(
         fill=text_color,
         shadow=options.shadow,
     )
+
+    return canvas.convert("RGB")
+
+
+def _split_paragraphs(text: str, font: ImageFont.ImageFont, max_width: int) -> List[str]:
+    """Split multiline text into wrapped lines for left-aligned regions."""
+    if not text:
+        return []
+
+    segments = text.splitlines() or [text]
+    lines: List[str] = []
+    for segment in segments:
+        stripped = segment.strip()
+        if not stripped:
+            continue
+        lines.extend(wrap_text(stripped, font, max_width))
+    return lines
+
+
+def _lines_height(lines: Sequence[str], font: ImageFont.ImageFont, spacing: int) -> int:
+    if not lines:
+        return 0
+    heights = [text_height(font, line) for line in lines]
+    return sum(heights) + spacing * (len(lines) - 1)
+
+
+def _draw_lines(
+    draw: ImageDraw.ImageDraw,
+    *,
+    lines: Sequence[str],
+    font: ImageFont.ImageFont,
+    start: Tuple[int, int],
+    fill: Tuple[int, int, int],
+    spacing: int,
+    shadow: bool,
+) -> None:
+    x, y = start
+    for index, line in enumerate(lines):
+        if shadow:
+            draw.text((x + 2, y + 2), line, font=font, fill=_shadow_color(fill))
+        draw.text((x, y), line, font=font, fill=fill)
+        if index < len(lines) - 1:
+            y += text_height(font, line) + spacing
+
+
+def create_brand_card(
+    *,
+    background_path: Optional[str] = None,
+    background_image: Optional[Image.Image] = None,
+    brand_text: str = "",
+    title_text: str = "",
+    subtitle_text: str = "",
+    footer_text: str = "",
+    size: int = 512,
+    font_specs: Optional[Mapping[str, FontSpec]] = None,
+    overlay_color: Optional[Tuple[int, int, int, int]] = (255, 255, 255, 48),
+    shadow: bool = False,
+) -> Image.Image:
+    """Render a brand layout card using a supplied background image."""
+
+    target_size = (size, size)
+    if background_image is not None:
+        base = ensure_square(background_image).resize(target_size, Image.LANCZOS)
+    elif background_path:
+        base = load_background(background_path, target_size)
+    else:
+        base = Image.new("RGB", target_size, (236, 236, 236))
+
+    canvas = base.convert("RGBA")
+
+    if overlay_color:
+        overlay = Image.new("RGBA", canvas.size, overlay_color)
+        canvas = Image.alpha_composite(canvas, overlay)
+
+    defaults = _default_brand_card_fonts(size)
+    if font_specs:
+        for key, spec in font_specs.items():
+            defaults[key] = spec
+
+    fonts = {key: load_font(spec) for key, spec in defaults.items()}
+
+    text_color = pick_text_color(canvas.convert("RGB"))
+
+    margin = max(24, size // 12)
+    max_text_width = canvas.width - (margin * 2)
+
+    gap_footer = max(16, size // 18)
+    gap_title_sub = max(14, size // 26)
+    title_spacing = max(10, size // 36)
+    subtitle_spacing = max(8, size // 40)
+
+    title_lines = _split_paragraphs(title_text, fonts["title"], max_text_width)
+    subtitle_lines = _split_paragraphs(subtitle_text, fonts["subtitle"], max_text_width)
+
+    title_height = _lines_height(title_lines, fonts["title"], title_spacing)
+    subtitle_height = _lines_height(subtitle_lines, fonts["subtitle"], subtitle_spacing)
+
+    footer_height = text_height(fonts["footer"], footer_text) if footer_text else 0
+
+    footer_bottom = canvas.height - margin
+    footer_top = footer_bottom - footer_height if footer_height else footer_bottom
+    subtitle_bottom = footer_top - gap_footer if footer_height else footer_bottom
+    subtitle_top = subtitle_bottom - subtitle_height
+    title_bottom = subtitle_top - gap_title_sub if subtitle_lines else subtitle_bottom
+    title_top = title_bottom - title_height
+
+    draw = ImageDraw.Draw(canvas)
+
+    if brand_text:
+        brand_font = fonts["brand"]
+        brand_width = text_width(brand_font, brand_text)
+        brand_height = text_height(brand_font, brand_text)
+        brand_x = canvas.width - margin - brand_width
+        brand_y = margin
+        if shadow:
+            draw.text((brand_x + 2, brand_y + 2), brand_text, font=brand_font, fill=_shadow_color(text_color))
+        draw.text((brand_x, brand_y), brand_text, font=brand_font, fill=text_color)
+
+    if title_lines:
+        _draw_lines(
+            draw,
+            lines=title_lines,
+            font=fonts["title"],
+            start=(margin, title_top),
+            fill=text_color,
+            spacing=title_spacing,
+            shadow=shadow,
+        )
+
+    if subtitle_lines:
+        _draw_lines(
+            draw,
+            lines=subtitle_lines,
+            font=fonts["subtitle"],
+            start=(margin, subtitle_top),
+            fill=text_color,
+            spacing=subtitle_spacing,
+            shadow=shadow,
+        )
+
+    if footer_text:
+        footer_font = fonts["footer"]
+        footer_width = text_width(footer_font, footer_text)
+        footer_x = canvas.width - margin - footer_width
+        footer_y = footer_top
+        if shadow:
+            draw.text((footer_x + 2, footer_y + 2), footer_text, font=footer_font, fill=_shadow_color(text_color))
+        draw.text((footer_x, footer_y), footer_text, font=footer_font, fill=text_color)
 
     return canvas.convert("RGB")
 
@@ -325,6 +483,7 @@ __all__ = [
     "TextSpec",
     "TextBlock",
     "create_card",
+    "create_brand_card",
     "draw_text_blocks",
     "generate_prompt_gradient",
     "load_background",
