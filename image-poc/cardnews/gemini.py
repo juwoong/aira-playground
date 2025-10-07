@@ -18,9 +18,14 @@ except ImportError:  # pragma: no cover - handled gracefully at runtime
     genai = None  # type: ignore[assignment]
     types = None  # type: ignore[assignment]
 
-DEFAULT_TEXT_MODEL = "gemini-2.0-flash"
-DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image"
+DEFAULT_TEXT_MODEL = "nanobanana"
+DEFAULT_IMAGE_MODEL = "nanobanana-image"
 ENV_API_KEY = "GEMINI_API_KEY"
+
+MODEL_ALIASES = {
+    "nanobanana": "gemini-2.0-flash",
+    "nanobanana-image": "gemini-2.5-flash-image",
+}
 
 
 class GeminiNotConfigured(RuntimeError):
@@ -56,8 +61,9 @@ def generate_cards(
     if key and genai is not None and types is not None:
         try:
             client = _get_client(key)
+            resolved_model = _resolve_model_name(model_name)
             response = client.models.generate_content(
-                model=model_name,
+                model=resolved_model,
                 contents=[_build_text_prompt(topic=topic, count=count, style=style)],
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
@@ -87,8 +93,9 @@ def generate_background_image(
         raise GeminiNotConfigured("google-genai package is not available; install google-genai.")
 
     client = _get_client(key)
+    resolved_model = _resolve_model_name(model_name)
     response = client.models.generate_content(
-        model=model_name,
+        model=resolved_model,
         contents=[_build_image_prompt(prompt)],
         config=types.GenerateContentConfig(
             image_config=types.ImageConfig(aspect_ratio=aspect_ratio),
@@ -195,6 +202,11 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
     except OSError:
         pass
     return result
+
+
+def _resolve_model_name(model: str) -> str:
+    actual = MODEL_ALIASES.get(model.lower()) if isinstance(model, str) else None
+    return actual or model
 
 
 @lru_cache(maxsize=2)

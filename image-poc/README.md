@@ -48,7 +48,8 @@ uv run cardnews config --set font-title-size 80
 
 ## 설정 위치
 
-- 기본 설정 파일: `~/.config/cardnews/config.yaml`
+- 기본 설정 파일: `./config.yaml` (프로젝트 루트)
+- 기존에 `~/.config/cardnews/config.yaml`이 있었다면 자동으로 읽어오지만, 저장 시에는 루트의 `config.yaml`로 기록됩니다.
 - `cardnews config --reset`으로 초기화할 수 있습니다.
 
 ## 배경 이미지
@@ -65,17 +66,18 @@ uv run cardnews config --set font-title-size 80
 
 ## Figma 통합
 
-- `FIGMA_ACCESS_TOKEN` 환경 변수를 설정하면 Figma API를 통해 지정한 프레임을 렌더링하고, 텍스트 영역 좌표를 자동으로 불러옵니다.
-- `cardnews figma` 명령은 기본 설정(`figma.file_key`, `figma.frame_id`, `figma.nodes.*`)을 활용하며, 필요 시 CLI 옵션으로 덮어쓸 수 있습니다.
+- `FIGMA_API_KEY` 환경 변수를 설정하면 Figma API를 통해 지정한 프레임을 렌더링하고, 텍스트 영역 좌표를 자동으로 불러옵니다. (기존 `FIGMA_ACCESS_TOKEN`도 하위 호환용으로 인식됩니다.)
+- `cardnews figma` 명령은 기본 설정(`figma.file_key`, `figma.frame_id`, `figma.nodes.*`/`figma.names.*`)을 활용하며, 필요 시 CLI 옵션으로 덮어쓸 수 있습니다.
 - 상호명(`--business-name`) 입력을 지원하며, 배경 이미지 프롬프트에는 기본적으로 `실사스러운 이미지를 생성` 요구사항이 자동으로 추가됩니다.
+- Gemini 통합 모델 기본값은 `nanobanana`(텍스트)와 `nanobanana-image`(이미지)이며, 내부적으로 Google Gemini 모델로 매핑됩니다.
 
 ### 설정 방법 요약
 
-1. **Figma Personal Access Token 발급**  → Figma 웹 앱에서 `Settings > Account > Personal access tokens`로 이동해 새 토큰을 만들고 `FIGMA_ACCESS_TOKEN` 환경 변수에 저장합니다.
-2. **파일 키 확인**  → Figma 파일 URL의 `/file/<FILE_KEY>/` 부분에서 `<FILE_KEY>`를 복사해 `figma.file_key`에 입력합니다.
-3. **프레임 ID 확보**  → 템플릿으로 사용할 프레임을 선택한 뒤 `Share > Copy link`를 사용하면 URL 끝의 `?node-id=<FRAME_ID>` 값을 얻을 수 있습니다.
-4. **텍스트 슬롯 노드 ID 확인**  → 타이틀/서브타이틀/상호명 레이어를 각각 선택해 `Copy/Paste as > Copy link`를 수행하고, 링크의 `node-id` 값을 `figma.nodes.title`, `figma.nodes.subtitle`, `figma.nodes.business`에 채웁니다.
-5. **설정 저장**  → `~/.config/cardnews/config.yaml`에 아래와 같은 섹션을 추가하거나 `cardnews config --set` 명령으로 값을 등록합니다.
+1. **Figma Personal Access Token 발급** → Figma 웹 앱에서 `Settings > Account > Personal access tokens`로 이동해 새 토큰을 만들고 `FIGMA_API_KEY` 환경 변수에 저장합니다.
+2. **파일 키 확인** → Figma 파일 URL의 `/file/<FILE_KEY>/` 부분에서 `<FILE_KEY>`를 복사해 `figma.file_key`에 입력합니다.
+3. **프레임 ID 확보** → 템플릿으로 사용할 프레임을 선택한 뒤 `Share > Copy link`를 사용하면 URL 끝의 `?node-id=<FRAME_ID>` 값을 얻을 수 있습니다.
+4. **텍스트 슬롯 지정** → 레이어 ID를 알고 있다면 `Copy link`의 `node-id`를 `figma.nodes.*`에 입력하고, 어렵다면 프레임 안에서 보이는 레이어 이름을 `figma.names.*`에 그대로 적으면 됩니다. 이름과 ID 중 하나만 있어도 동작합니다.
+5. **설정 저장** → 루트의 `config.yaml`에 아래와 같은 섹션을 추가하거나 `cardnews config --set figma-title-name "타이틀"`처럼 명령으로 값을 등록합니다.
 
 ```yaml
 figma:
@@ -85,7 +87,11 @@ figma:
     title: "34:567"
     subtitle: "34:890"
     business: "34:901"
-  scale: 1.5  # 선택 사항: Figma 렌더링 배율
+  names:
+    title: "메인 타이틀"
+    subtitle: "서브텍스트"
+    business: "브랜드명"
+  scale: 1.5 # 선택 사항: Figma 렌더링 배율
   format: "png"
 ```
 

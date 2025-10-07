@@ -6,13 +6,14 @@ import os
 import time
 from io import BytesIO
 from dataclasses import dataclass
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 import requests
 from PIL import Image
 
 
-FIGMA_TOKEN_ENV = "FIGMA_ACCESS_TOKEN"
+FIGMA_TOKEN_ENV = "FIGMA_API_KEY"
+_LEGACY_FIGMA_TOKEN_ENV = "FIGMA_ACCESS_TOKEN"
 FIGMA_BASE_URL = "https://api.figma.com/v1"
 
 
@@ -51,6 +52,7 @@ class TemplateLayout:
 
     frame_bounds: NodeBounds
     slots: Mapping[str, NodeBounds]
+    backgrounds: Tuple[NodeBounds, ...]
     scale: float
 
     def box_for(self, slot: str) -> Optional[Tuple[int, int, int, int]]:
@@ -60,18 +62,27 @@ class TemplateLayout:
         frame = self.frame_bounds
         return node.to_box(self.scale, frame.x, frame.y)
 
+    def background_boxes(self) -> Tuple[Tuple[int, int, int, int], ...]:
+        frame = self.frame_bounds
+        return tuple(node.to_box(self.scale, frame.x, frame.y) for node in self.backgrounds)
+
 
 def get_token() -> Optional[str]:
     """Return the configured Figma personal access token, if available."""
 
-    token = os.environ.get(FIGMA_TOKEN_ENV)
+    token = os.environ.get(FIGMA_TOKEN_ENV) or os.environ.get(_LEGACY_FIGMA_TOKEN_ENV)
     if token:
         return token.strip()
     return None
 
 
 def build_headers(token: str) -> Mapping[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+    """Return headers suitable for Figma personal access tokens."""
+
+    return {
+        "X-Figma-Token": token,
+        "Accept": "application/json",
+    }
 
 
 class FigmaClient:
@@ -79,7 +90,9 @@ class FigmaClient:
 
     def __init__(self, token: str, session: Optional[requests.Session] = None) -> None:
         if not token:
-            raise FigmaNotConfigured("Figma API 토큰이 설정되지 않았습니다. FIGMA_ACCESS_TOKEN 환경 변수를 확인하세요.")
+            raise FigmaNotConfigured(
+                "Figma API 토큰이 설정되지 않았습니다. FIGMA_API_KEY 또는 FIGMA_ACCESS_TOKEN 환경 변수를 확인하세요."
+            )
         self._token = token
         self._session = session or requests.Session()
 
@@ -90,12 +103,17 @@ class FigmaClient:
         file_key: str,
         frame_id: str,
         slot_nodes: Mapping[str, str],
+        slot_names: Mapping[str, str],
+        background_nodes: Tuple[str, ...] = (),
+        background_names: Tuple[str, ...] = (),
         *,
         scale: float = 1.0,
     ) -> TemplateLayout:
         """Return layout metadata for a frame and its text slots."""
 
-        node_ids = [frame_id] + [node for node in slot_nodes.values() if node]
+        node_ids = [frame_id]
+        node_ids += [node for node in slot_nodes.values() if node]
+        node_ids += [node for node in background_nodes if node]
         payload = self._get_json(
             f"{FIGMA_BASE_URL}/files/{file_key}/nodes",
             params={"ids": ",".join(node_ids)},
@@ -113,20 +131,73 @@ class FigmaClient:
         frame_bounds = _bounds_from_node(frame_node)
 
         resolved_slots: Dict[str, NodeBounds] = {}
-        for slot_name, node_id in slot_nodes.items():
+        resolved_backgrounds: List[NodeBounds] = []
+        for slot_name in slot_nodes.keys() | slot_names.keys():
+            node_id = slot_nodes.get(slot_name)
+            slot_node_payload = None
+            if node_id:
+                node_payload = nodes.get(node_id)
+                if not node_payload:
+                    raise FigmaAPIError(f"슬롯 '{slot_name}'에 대한 노드({node_id}) 정보를 찾을 수 없습니다.")
+                slot_node_payload = _extract_node(node_id, node_payload)
+            else:
+                lookup_name = slot_names.get(slot_name)
+                if lookup_name:
+                    slot_node_payload = _find_child_by_name(frame_node, lookup_name)
+                    if slot_node_payload is None:
+                        raise FigmaAPIError(
+                            f"슬롯 '{slot_name}' 이름 '{lookup_name}'을(를) 프레임에서 찾을 수 없습니다."
+                        )
+
+            if slot_node_payload is None:
+                continue
+
+            resolved_slots[slot_name] = _bounds_from_node(slot_node_payload)
+
+        for node_id in background_nodes:
             if not node_id:
                 continue
             node_payload = nodes.get(node_id)
             if not node_payload:
-                raise FigmaAPIError(f"슬롯 '{slot_name}'에 대한 노드({node_id}) 정보를 찾을 수 없습니다.")
-            slot_node = _extract_node(node_id, node_payload)
-            resolved_slots[slot_name] = _bounds_from_node(slot_node)
+                raise FigmaAPIError(f"배경 노드({node_id}) 정보를 찾을 수 없습니다.")
+            resolved_backgrounds.append(_bounds_from_node(_extract_node(node_id, node_payload)))
+
+        for lookup_name in background_names:
+            if not lookup_name:
+                continue
+            background_payload = _find_child_by_name(frame_node, lookup_name, include_self=True)
+            if background_payload is None:
+                raise FigmaAPIError(f"배경 레이어 이름 '{lookup_name}'을(를) 프레임에서 찾을 수 없습니다.")
+            resolved_backgrounds.append(_bounds_from_node(background_payload))
 
         frame_width = frame_bounds.width or 1
         render_width = frame_width * scale
         resolved_scale = render_width / frame_width
 
-        return TemplateLayout(frame_bounds=frame_bounds, slots=resolved_slots, scale=resolved_scale)
+        return TemplateLayout(
+            frame_bounds=frame_bounds,
+            slots=resolved_slots,
+            backgrounds=tuple(resolved_backgrounds),
+            scale=resolved_scale,
+        )
+
+    def fetch_node_tree(self, file_key: str, node_id: str) -> Mapping[str, object]:
+        """Return the hydrated node tree for the given node identifier."""
+
+        payload = self._get_json(
+            f"{FIGMA_BASE_URL}/files/{file_key}/nodes",
+            params={"ids": node_id},
+        )
+
+        nodes = payload.get("nodes")
+        if not isinstance(nodes, Mapping):
+            raise FigmaAPIError("Figma 응답에서 노드 정보를 찾을 수 없습니다.")
+
+        node_payload = nodes.get(node_id)
+        if not node_payload:
+            raise FigmaAPIError(f"노드({node_id}) 정보를 가져올 수 없습니다.")
+
+        return _extract_node(node_id, node_payload)
 
     def render_frame(
         self,
@@ -162,6 +233,15 @@ class FigmaClient:
                 raise FigmaAPIError(f"Figma 이미지 다운로드 실패 (status={response.status_code}).")
             time.sleep(1.5)
 
+    def fetch_file_document(self, file_key: str) -> Mapping[str, object]:
+        """Return the full document tree for the given file."""
+
+        payload = self._get_json(f"{FIGMA_BASE_URL}/files/{file_key}")
+        document = payload.get("document")
+        if not isinstance(document, Mapping):
+            raise FigmaAPIError("Figma 응답에서 document 정보를 찾을 수 없습니다.")
+        return document
+
     # Internal helpers ---------------------------------------------------
 
     def _get_json(self, url: str, params: Optional[Mapping[str, object]] = None) -> Mapping[str, object]:
@@ -193,6 +273,29 @@ def _bounds_from_node(node: Mapping[str, object]) -> NodeBounds:
     node_id = str(node.get("id", "")) or name
 
     return NodeBounds(node_id=node_id, name=name, x=x, y=y, width=width, height=height)
+
+
+def _find_child_by_name(
+    node: Mapping[str, object],
+    target: str,
+    *,
+    include_self: bool = False,
+) -> Optional[Mapping[str, object]]:
+    if include_self:
+        name = node.get("name")
+        if isinstance(name, str) and name.strip() == target.strip():
+            return node
+
+    for child in node.get("children", []) or []:
+        if not isinstance(child, Mapping):
+            continue
+        child_name = child.get("name")
+        if isinstance(child_name, str) and child_name.strip() == target.strip():
+            return child
+        found = _find_child_by_name(child, target, include_self=False)
+        if found is not None:
+            return found
+    return None
 
 __all__ = [
     "FigmaAPIError",

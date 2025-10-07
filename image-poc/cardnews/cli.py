@@ -5,11 +5,12 @@ from __future__ import annotations
 import datetime as _dt
 import copy
 import math
+from collections import Counter
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, Iterator, Mapping, Optional, Tuple
 
 import click
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageDraw, ImageChops
 
 from . import get_version
 from .config import DEFAULT_CONFIG, load_config, save_config, update_config
@@ -205,9 +206,19 @@ def batch(
 @click.option("--figma-title-node", type=str, help="타이틀 텍스트 슬롯 노드 ID")
 @click.option("--figma-subtitle-node", type=str, help="서브타이틀 텍스트 슬롯 노드 ID")
 @click.option("--figma-business-node", type=str, help="상호명 텍스트 슬롯 노드 ID")
+@click.option("--figma-title-name", type=str, help="타이틀 텍스트 레이어 이름")
+@click.option("--figma-subtitle-name", type=str, help="서브타이틀 텍스트 레이어 이름")
+@click.option("--figma-business-name", type=str, help="상호명 텍스트 레이어 이름")
+@click.option("--figma-background-node", type=str, multiple=True, help="제거할 배경 노드 ID")
+@click.option("--figma-background-name", type=str, multiple=True, help="제거할 배경 레이어 이름")
 @click.option("--figma-scale", type=float, default=None, help="Figma 렌더링 배율")
 @click.option("--figma-format", type=click.Choice(["png", "jpg", "jpeg"]), default=None, help="Figma 렌더링 포맷")
 @click.option("--figma-token", type=str, help="Figma API 토큰")
+@click.option(
+    "--figma-clear-background/--no-figma-clear-background",
+    default=None,
+    help="Figma 프레임 배경을 투명 처리",
+)
 @click.option("--no-shadow", is_flag=True, help="텍스트 그림자 비활성화")
 @click.option("--dry-run", is_flag=True, help="이미지를 저장하지 않고 동작만 확인")
 @click.pass_context
@@ -226,9 +237,15 @@ def figma_template(
     figma_title_node: Optional[str],
     figma_subtitle_node: Optional[str],
     figma_business_node: Optional[str],
+    figma_title_name: Optional[str],
+    figma_subtitle_name: Optional[str],
+    figma_business_name: Optional[str],
+    figma_background_node: Tuple[str, ...],
+    figma_background_name: Tuple[str, ...],
     figma_scale: Optional[float],
     figma_format: Optional[str],
     figma_token: Optional[str],
+    figma_clear_background: Optional[bool],
     no_shadow: bool,
     dry_run: bool,
 ) -> None:
@@ -264,11 +281,31 @@ def figma_template(
         "subtitle": figma_subtitle_node or _string_or_default(nodes_cfg.get("subtitle")),
         "business": figma_business_node or _string_or_default(nodes_cfg.get("business")),
     }
+    names_cfg = figma_cfg.get("names", {}) if isinstance(figma_cfg, dict) else {}
+    slot_names = {
+        "title": figma_title_name or _string_or_default(names_cfg.get("title")),
+        "subtitle": figma_subtitle_name or _string_or_default(names_cfg.get("subtitle")),
+        "business": figma_business_name or _string_or_default(names_cfg.get("business")),
+    }
 
-    missing_slots = [slot for slot in ("title", "subtitle") if not slot_nodes.get(slot)]
+    background_nodes_cfg = figma_cfg.get("background_nodes", []) if isinstance(figma_cfg, dict) else []
+    background_names_cfg = figma_cfg.get("background_names", []) if isinstance(figma_cfg, dict) else []
+
+    def _normalize_sequence(items: Iterable[object]) -> Tuple[str, ...]:
+        normalized = []
+        for item in items:
+            value = _string_or_default(item)
+            if value:
+                normalized.append(value)
+        return tuple(normalized)
+
+    background_nodes = _normalize_sequence(list(figma_background_node) + list(background_nodes_cfg))
+    background_names = _normalize_sequence(list(figma_background_name) + list(background_names_cfg))
+
+    missing_slots = [slot for slot in ("title", "subtitle") if not (slot_nodes.get(slot) or slot_names.get(slot))]
     if missing_slots:
         raise click.UsageError(
-            "Figma 템플릿 설정이 부족합니다. config의 figma.nodes 값을 확인하거나 명령 옵션으로 노드 ID를 지정하세요."
+            "Figma 템플릿 설정이 부족합니다. config의 figma.nodes 또는 figma.names 값을 확인하거나 명령 옵션으로 레이어 정보를 지정하세요."
         )
     if not file_key or not frame_id:
         raise click.UsageError("Figma 파일 키와 프레임 ID가 필요합니다. --figma-file-key와 --figma-frame-id를 확인하세요.")
@@ -285,15 +322,37 @@ def figma_template(
             f"Figma API 토큰이 필요합니다. {FIGMA_TOKEN_ENV} 환경 변수 또는 --figma-token 옵션을 사용해주세요."
         )
 
+    clear_background_cfg = figma_cfg.get("clear_background")
+    clear_background = (
+        figma_clear_background
+        if figma_clear_background is not None
+        else bool(clear_background_cfg)
+    )
+
     client = FigmaClient(token)
 
     try:
-        layout = client.fetch_layout(file_key=file_key, frame_id=frame_id, slot_nodes=slot_nodes, scale=scale)
+        layout = client.fetch_layout(
+            file_key=file_key,
+            frame_id=frame_id,
+            slot_nodes=slot_nodes,
+            slot_names=slot_names,
+            background_nodes=background_nodes,
+            background_names=background_names,
+            scale=scale,
+        )
         overlay_image = client.render_frame(file_key=file_key, frame_id=frame_id, scale=scale, format=image_format)
     except FigmaNotConfigured as err:
         raise click.UsageError(str(err)) from err
     except FigmaAPIError as err:
         raise click.ClickException(str(err)) from err
+
+    if clear_background:
+        background_boxes = layout.background_boxes()
+        if background_boxes:
+            overlay_image = _clear_background_regions(overlay_image, background_boxes)
+        else:
+            overlay_image = _clear_uniform_background(overlay_image)
 
     card_prompt = _augment_image_prompt(card_data.get("image_prompt")) if card_data.get("image_prompt") else ""
     card_data["image_prompt"] = card_prompt
@@ -340,9 +399,8 @@ def figma_template(
     }
 
     blocks = []
-    for slot, node_id in slot_nodes.items():
-        if not node_id:
-            continue
+    slot_keys = set(slot_nodes.keys()) | set(slot_names.keys())
+    for slot in slot_keys:
         box = layout.box_for(slot)
         if not box:
             continue
@@ -373,6 +431,130 @@ def figma_template(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     final_image.save(output_path)
     click.echo(f"생성 완료: {output_path}")
+
+
+@main.command(name="figma-nodes")
+@click.option("--figma-file-key", type=str, help="Figma 파일 키")
+@click.option("--figma-node-id", type=str, help="탐색할 노드 ID (미지정 시 프레임 ID 사용)")
+@click.option("--figma-frame-id", type=str, help="기본 프레임 ID")
+@click.option("--figma-token", type=str, help="Figma API 토큰")
+@click.option("--max-depth", type=int, default=None, help="탐색할 최대 깊이 (0=루트만)")
+@click.option("--show-bounds", is_flag=True, help="absoluteBoundingBox 좌표 출력")
+@click.option("--show-text", is_flag=True, help="텍스트 노드의 내용을 함께 출력")
+@click.pass_context
+def figma_nodes(
+    ctx: click.Context,
+    figma_file_key: Optional[str],
+    figma_node_id: Optional[str],
+    figma_frame_id: Optional[str],
+    figma_token: Optional[str],
+    max_depth: Optional[int],
+    show_bounds: bool,
+    show_text: bool,
+) -> None:
+    """Figma 프레임/노드의 하위 레이어와 ID를 출력합니다."""
+
+    config = ctx.obj["config"]
+    figma_cfg = config.get("figma", {}) if isinstance(config, dict) else {}
+
+    file_key = figma_file_key or _string_or_default(figma_cfg.get("file_key"))
+    if not file_key:
+        raise click.UsageError("Figma 파일 키가 필요합니다. --figma-file-key 또는 설정 값을 확인하세요.")
+
+    default_node = figma_frame_id or _string_or_default(figma_cfg.get("frame_id"))
+    target_node = figma_node_id or default_node
+    if not target_node:
+        raise click.UsageError("노드 ID가 필요합니다. --figma-node-id 또는 --figma-frame-id 옵션을 확인하세요.")
+
+    token = figma_token or get_figma_token() or _string_or_default(figma_cfg.get("token"))
+    if not token:
+        raise click.UsageError(
+            f"Figma API 토큰이 필요합니다. {FIGMA_TOKEN_ENV} 환경 변수 또는 --figma-token 옵션을 사용해주세요."
+        )
+
+    client = FigmaClient(token)
+    try:
+        root = client.fetch_node_tree(file_key=file_key, node_id=target_node)
+    except FigmaNotConfigured as err:
+        raise click.UsageError(str(err)) from err
+    except FigmaAPIError as err:
+        raise click.ClickException(str(err)) from err
+
+    rows = list(_iter_figma_nodes(root, max_depth=max_depth))
+    click.echo(f"노드 {target_node} 기준 {len(rows)}개 레이어")
+    for depth, node_id, name, node_type, bbox, characters in rows:
+        indent = "  " * depth
+        label = name or "<unnamed>"
+        type_suffix = f" [{node_type}]" if node_type else ""
+        details = []
+        if show_bounds and bbox:
+            details.append(_format_bbox(bbox))
+        if show_text and characters:
+            details.append(_format_characters(characters))
+        detail_str = f" | {' | '.join(details)}" if details else ""
+        click.echo(f"{indent}- {label} ({node_id}){type_suffix}{detail_str}")
+
+
+@main.command(name="figma-frames")
+@click.option("--figma-file-key", type=str, help="Figma 파일 키")
+@click.option("--figma-token", type=str, help="Figma API 토큰")
+@click.option("--max-depth", type=int, default=None, help="프레임을 탐색할 최대 깊이")
+@click.pass_context
+def figma_frames(
+    ctx: click.Context,
+    figma_file_key: Optional[str],
+    figma_token: Optional[str],
+    max_depth: Optional[int],
+) -> None:
+    """파일 전체에서 프레임 노드와 ID를 나열합니다."""
+
+    config = ctx.obj["config"]
+    figma_cfg = config.get("figma", {}) if isinstance(config, dict) else {}
+
+    file_key = figma_file_key or _string_or_default(figma_cfg.get("file_key"))
+    if not file_key:
+        raise click.UsageError("Figma 파일 키가 필요합니다. --figma-file-key 옵션 또는 설정 값을 확인하세요.")
+
+    token = figma_token or get_figma_token() or _string_or_default(figma_cfg.get("token"))
+    if not token:
+        raise click.UsageError(
+            f"Figma API 토큰이 필요합니다. {FIGMA_TOKEN_ENV} 환경 변수 또는 --figma-token 옵션을 사용해주세요."
+        )
+
+    client = FigmaClient(token)
+    try:
+        document = client.fetch_file_document(file_key=file_key)
+    except FigmaNotConfigured as err:
+        raise click.UsageError(str(err)) from err
+    except FigmaAPIError as err:
+        raise click.ClickException(str(err)) from err
+
+    pages = document.get("children", []) if isinstance(document, Mapping) else []
+    if not pages:
+        click.echo("페이지 정보를 찾지 못했습니다.")
+        return
+
+    total_frames = 0
+    for page in pages:
+        if not isinstance(page, Mapping) or page.get("type") != "CANVAS":
+            continue
+        page_name = str(page.get("name", "")) or "(페이지)"
+        page_id = str(page.get("id", ""))
+        click.echo(f"[페이지] {page_name} ({page_id})")
+
+        frames = list(_iter_frame_nodes(page.get("children"), max_depth=max_depth))
+        if not frames:
+            click.echo("  (프레임 없음)")
+            continue
+
+        for depth, node in frames:
+            indent = "  " * (depth + 1)
+            name = str(node.get("name", "")) or "<unnamed>"
+            node_id = str(node.get("id", ""))
+            click.echo(f"{indent}- {name} ({node_id})")
+            total_frames += 1
+
+    click.echo(f"총 {total_frames}개 프레임")
 
 
 @main.command()
@@ -502,6 +684,131 @@ def _build_render_options(
     )
 
 
+def _format_bbox(bbox: Mapping[str, object]) -> str:
+    try:
+        x = float(bbox.get("x", 0.0))
+        y = float(bbox.get("y", 0.0))
+        w = float(bbox.get("width", 0.0))
+        h = float(bbox.get("height", 0.0))
+    except (TypeError, ValueError):
+        return "bbox=?"
+    return f"x={x:.2f}, y={y:.2f}, w={w:.2f}, h={h:.2f}"
+
+
+def _format_characters(text: str, *, limit: int = 60) -> str:
+    trimmed = text.strip()
+    if len(trimmed) > limit:
+        trimmed = f"{trimmed[:limit]}…"
+    return f'"{trimmed}"'
+
+
+def _clear_background_regions(
+    image: PILImage.Image,
+    boxes: Iterable[Tuple[int, int, int, int]],
+) -> PILImage.Image:
+    if image.mode != "RGBA":
+        image = image.convert("RGBA")
+
+    mask = PILImage.new("L", image.size, 0)
+    draw = ImageDraw.Draw(mask)
+    for box in boxes:
+        draw.rectangle(box, fill=255)
+
+    if mask.getbbox() is None:
+        return image
+
+    result = image.copy()
+    alpha = result.getchannel("A")
+    keep_alpha = PILImage.eval(mask, lambda px: 0 if px else 255)
+    new_alpha = ImageChops.multiply(alpha, keep_alpha)
+    result.putalpha(new_alpha)
+    return result
+
+
+def _clear_uniform_background(image: PILImage.Image, tolerance: int = 8) -> PILImage.Image:
+    """Drop uniform frame backgrounds so custom backdrops remain visible."""
+
+    if image.mode != "RGBA":
+        image = image.convert("RGBA")
+
+    width, height = image.size
+    if width == 0 or height == 0:
+        return image
+
+    pixels = image.load()
+    corners = [
+        pixels[0, 0],
+        pixels[width - 1, 0],
+        pixels[0, height - 1],
+        pixels[width - 1, height - 1],
+    ]
+    valid_corners = [color for color in corners if isinstance(color, tuple) and len(color) == 4]
+    if not valid_corners:
+        return image
+    reference, _ = Counter(valid_corners).most_common(1)[0]
+
+    ref_r, ref_g, ref_b, _ = reference
+    result = image.copy()
+    result_pixels = result.load()
+    for y in range(height):
+        for x in range(width):
+            r, g, b, a = result_pixels[x, y]
+            if (
+                abs(r - ref_r) <= tolerance
+                and abs(g - ref_g) <= tolerance
+                and abs(b - ref_b) <= tolerance
+            ):
+                result_pixels[x, y] = (r, g, b, 0)
+    return result
+
+
+def _iter_figma_nodes(
+    node: Mapping[str, object],
+    max_depth: Optional[int] = None,
+    *,
+    _depth: int = 0,
+) -> Iterator[Tuple[int, str, str, str, Optional[Mapping[str, object]], Optional[str]]]:
+    node_id = str(node.get("id", ""))
+    name = str(node.get("name", "") or "")
+    node_type = str(node.get("type", "") or "")
+    bbox = node.get("absoluteBoundingBox") if isinstance(node.get("absoluteBoundingBox"), Mapping) else None
+    characters = node.get("characters")
+    if not isinstance(characters, str):
+        characters = None
+    yield (_depth, node_id, name, node_type, bbox, characters)
+
+    if max_depth is not None and _depth >= max_depth:
+        return
+
+    children = node.get("children")
+    if isinstance(children, list):
+        for child in children:
+            if isinstance(child, Mapping):
+                yield from _iter_figma_nodes(child, max_depth=max_depth, _depth=_depth + 1)
+
+
+def _iter_frame_nodes(
+    nodes: Optional[object],
+    max_depth: Optional[int] = None,
+    *,
+    _depth: int = 0,
+) -> Iterator[Tuple[int, Mapping[str, object]]]:
+    if not isinstance(nodes, list):
+        return
+
+    for child in nodes:
+        if not isinstance(child, Mapping):
+            continue
+        node_type = child.get("type")
+        if node_type == "FRAME":
+            yield (_depth, child)
+            if max_depth is None or _depth < max_depth:
+                yield from _iter_frame_nodes(child.get("children"), max_depth=max_depth, _depth=_depth + 1)
+        else:
+            if max_depth is None or _depth <= max_depth:
+                yield from _iter_frame_nodes(child.get("children"), max_depth=max_depth, _depth=_depth)
+
+
 def _fonts_from_config(config: Dict[str, object]) -> Tuple[FontSpec, FontSpec]:
     return (
         _font_spec_from_config(config, "title", 72),
@@ -576,6 +883,19 @@ def _apply_config_update(target: Dict[str, object], key: str, value: str) -> Non
         "image-overlay": ("image", "overlay"),
         "gemini-model": ("gemini", "model"),
         "gemini-image-model": ("gemini", "image_model"),
+        "figma-file-key": ("figma", "file_key"),
+        "figma-frame-id": ("figma", "frame_id"),
+        "figma-title-node": ("figma", "nodes", "title"),
+        "figma-subtitle-node": ("figma", "nodes", "subtitle"),
+        "figma-business-node": ("figma", "nodes", "business"),
+        "figma-title-name": ("figma", "names", "title"),
+        "figma-subtitle-name": ("figma", "names", "subtitle"),
+        "figma-business-name": ("figma", "names", "business"),
+        "figma-background-node": ("figma", "background_nodes"),
+        "figma-background-name": ("figma", "background_names"),
+        "figma-scale": ("figma", "scale"),
+        "figma-format": ("figma", "format"),
+        "figma-clear-background": ("figma", "clear_background"),
     }
     path = mapping.get(key)
     if not path:
@@ -586,8 +906,13 @@ def _apply_config_update(target: Dict[str, object], key: str, value: str) -> Non
     final = path[-1]
     if final in {"width", "height", "size"}:
         cursor[final] = int(value)
-    elif final == "overlay":
+    elif final in {"overlay", "clear_background"}:
         cursor[final] = value.lower() in {"1", "true", "yes", "on"}
+    elif final == "scale":
+        try:
+            cursor[final] = float(value)
+        except ValueError as err:
+            raise click.UsageError("figma.scale 값은 숫자여야 합니다.") from err
     else:
         cursor[final] = value
 

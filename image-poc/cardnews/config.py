@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yaml
 
 CONFIG_ENV_VAR = "CARDNEWS_CONFIG_PATH"
-DEFAULT_CONFIG_DIR = Path.home() / ".config" / "cardnews"
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_FILE = "config.yaml"
+LEGACY_CONFIG_PATH = Path.home() / ".config" / "cardnews" / DEFAULT_CONFIG_FILE
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "fonts": {
@@ -33,8 +34,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "overlay": True,
     },
     "gemini": {
-        "model": "gemini-2.0-flash",
-        "image_model": "gemini-2.5-flash-image",
+        "model": "nanobanana",
+        "image_model": "nanobanana-image",
     },
     "figma": {
         "file_key": "",
@@ -44,14 +45,22 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "subtitle": "",
             "business": "",
         },
+        "names": {
+            "title": "",
+            "subtitle": "",
+            "business": "",
+        },
+        "background_nodes": [],
+        "background_names": [],
         "scale": 1.0,
         "format": "png",
+        "clear_background": False,
     },
 }
 
 
 def _get_config_path() -> Path:
-    """Resolve the config file path, creating parent directories if needed."""
+    """Resolve the primary config file path inside the project workspace."""
     override = os.environ.get(CONFIG_ENV_VAR)
     if override:
         path = Path(override).expanduser()
@@ -61,8 +70,9 @@ def _get_config_path() -> Path:
         path.mkdir(parents=True, exist_ok=True)
         return path / DEFAULT_CONFIG_FILE
 
-    DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    return DEFAULT_CONFIG_DIR / DEFAULT_CONFIG_FILE
+    target = PACKAGE_ROOT / DEFAULT_CONFIG_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 CONFIG_PATH = _get_config_path()
@@ -70,14 +80,10 @@ CONFIG_PATH = _get_config_path()
 
 def load_config() -> Dict[str, Any]:
     """Load configuration from disk, falling back to defaults."""
-    if CONFIG_PATH.exists():
-        try:
-            with CONFIG_PATH.open("r", encoding="utf-8") as fh:
-                data = yaml.safe_load(fh) or {}
-        except yaml.YAMLError as err:
-            raise RuntimeError(f"Invalid configuration at {CONFIG_PATH}: {err}") from err
-    else:
-        data = {}
+    data = _load_yaml(CONFIG_PATH)
+    if data is None:
+        legacy = _load_yaml(LEGACY_CONFIG_PATH)
+        data = legacy if legacy is not None else {}
 
     return _deep_merge_dicts(DEFAULT_CONFIG, data)
 
@@ -95,6 +101,19 @@ def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
     merged = _deep_merge_dicts(current, updates)
     save_config(merged)
     return merged
+
+
+def _load_yaml(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            loaded = yaml.safe_load(fh) or {}
+            if isinstance(loaded, dict):
+                return loaded
+            raise RuntimeError(f"Invalid configuration structure at {path}; expected a mapping.")
+    except yaml.YAMLError as err:
+        raise RuntimeError(f"Invalid configuration at {path}: {err}") from err
 
 
 def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
