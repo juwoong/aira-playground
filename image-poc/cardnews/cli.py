@@ -63,6 +63,7 @@ def create(
     """단일 카드뉴스 이미지를 생성합니다."""
     config = ctx.obj["config"]
     card_data = _load_card_input(input, title, subtitle, image_prompt)
+    card_data["image_prompt"] = _ensure_realistic_prompt(card_data.get("image_prompt"))
 
     interactive = input is None
 
@@ -157,16 +158,17 @@ def batch(
             output_path = entry.get("output") or f"card_{idx:02}.jpg"
             background_path = entry.get("background_path")
             background_image = None
+            prompt_value = _ensure_realistic_prompt(entry.get("image_prompt"))
             if background_path:
                 background_path = str(background_path)
             else:
-                if not entry.get("image_prompt"):
+                if not prompt_value:
                     raise click.UsageError(
                         f"배경 이미지를 생성하려면 입력 데이터에 image_prompt 값을 제공해야 합니다. (index={idx})"
                     )
                 background_image = _maybe_generate_background(
                     ctx,
-                    prompt=entry.get("image_prompt"),
+                    prompt=prompt_value,
                     options=options,
                     config=config,
                     api_key=api_key,
@@ -174,7 +176,7 @@ def batch(
             image = create_card(
                 title=entry.get("title", ""),
                 subtitle=entry.get("subtitle", ""),
-                prompt=entry.get("image_prompt"),
+                prompt=prompt_value,
                 background_path=background_path,
                 fonts=fonts,
                 options=options,
@@ -259,8 +261,6 @@ def brand_card(
         if bg_from_data:
             background_value = Path(bg_from_data)
 
-    image_prompt_value = (image_prompt or data.get("image_prompt") or "").strip()
-
     output_value: Optional[Path] = output or None
     if not output_value:
         out_from_data = data.get("output")
@@ -274,7 +274,9 @@ def brand_card(
     if not title_text:
         raise click.UsageError("타이틀 텍스트를 제공해야 합니다.")
 
-    if not background_value and interactive:
+    prompt_value = _ensure_realistic_prompt(image_prompt or data.get("image_prompt"))
+
+    if not background_value and interactive and not prompt_value:
         bg_prompt = click.prompt(
             "배경 이미지 경로 (프롬프트를 사용할 경우 Enter)",
             default="",
@@ -286,10 +288,10 @@ def brand_card(
     if background_value and not background_value.exists():
         raise click.UsageError(f"배경 이미지 파일을 찾을 수 없습니다: {background_value}")
 
-    if not background_value and not image_prompt_value and interactive:
-        image_prompt_value = click.prompt("배경 이미지 프롬프트", type=str).strip()
+    if not background_value and not prompt_value and interactive:
+        prompt_value = _ensure_realistic_prompt(click.prompt("배경 이미지 프롬프트", type=str))
 
-    if not background_value and not image_prompt_value:
+    if not background_value and not prompt_value:
         raise click.UsageError("배경 이미지를 위한 경로 또는 프롬프트가 필요합니다.")
 
     if not output_value:
@@ -311,13 +313,14 @@ def brand_card(
         api_key = get_api_key()
         background_image = _maybe_generate_background(
             ctx,
-            prompt=image_prompt_value,
+            prompt=prompt_value,
             options=options,
             config=config,
             api_key=api_key,
         )
-        if background_image is None and image_prompt_value:
-            background_image = generate_prompt_gradient(image_prompt_value, (size, size))
+        if background_image is None:
+            fallback_prompt = prompt_value or "brand-card"
+            background_image = generate_prompt_gradient(fallback_prompt, (size, size))
 
     image = create_brand_card(
         background_path=background_path_value,
@@ -516,6 +519,16 @@ def _string_or_default(value: Optional[object], default: str = "") -> str:
     if value is None:
         return default
     return str(value)
+
+
+def _ensure_realistic_prompt(prompt: Optional[str]) -> str:
+    requirement = "실사스러운 이미지를 생성"
+    text = (prompt or "").strip()
+    if not text:
+        return ""
+    if requirement in text:
+        return text
+    return f"{text} {requirement}".strip()
 
 
 def _apply_config_update(target: Dict[str, object], key: str, value: str) -> None:

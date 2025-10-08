@@ -69,6 +69,7 @@ uv run cardnews config --set font-title-size 80
 - 배경 이미지는 자동으로 중앙 크롭 뒤 리사이즈되며, 필요 시 투명한 흰색 오버레이(기본 alpha 48)로 밝기를 맞춥니다.
 - 상단 오른쪽에는 브랜드 텍스트, 왼쪽 하단에는 타이틀/서브타이틀, 오른쪽 하단에는 추가 문구를 배치합니다.
 - `--input card.json` 옵션으로 JSON 파일을 읽어 동일한 키(`brand_text`, `title`, `subtitle`, `footer_text`, `background_path`, `output`)를 활용할 수 있습니다.
+- `--image-prompt`를 사용하면 Gemini 배경 생성 시 자동으로 "실사스러운 이미지를 생성" 문구가 덧붙어 기본적으로 사진 느낌의 결과를 얻습니다.
 - `config.yaml`의 `brand_card` 섹션으로 기본 오버레이/그림자 여부와 폰트를 조정할 수 있습니다.
 
 ```yaml
