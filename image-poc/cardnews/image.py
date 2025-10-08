@@ -44,10 +44,10 @@ class TextBlock:
 def _default_brand_card_fonts(size: int) -> Dict[str, FontSpec]:
     """Return default font specs scaled for the brand card layout."""
     return {
-        "brand": FontSpec(path=None, size=max(18, size // 24)),
-        "title": FontSpec(path=None, size=max(36, size // 9)),
-        "subtitle": FontSpec(path=None, size=max(20, size // 16)),
-        "footer": FontSpec(path=None, size=max(18, size // 20)),
+        "brand": FontSpec(path=None, size=max(16, size // 28)),
+        "title": FontSpec(path=None, size=max(32, size // 11)),
+        "subtitle": FontSpec(path=None, size=max(18, size // 18)),
+        "footer": FontSpec(path=None, size=max(16, size // 22)),
     }
 
 
@@ -184,13 +184,13 @@ def create_brand_card(
 
     text_color = pick_text_color(canvas.convert("RGB"))
 
-    margin = max(24, size // 12)
+    margin = max(20, size // 14)
     max_text_width = canvas.width - (margin * 2)
 
-    gap_footer = max(16, size // 18)
-    gap_title_sub = max(14, size // 26)
-    title_spacing = max(10, size // 36)
-    subtitle_spacing = max(8, size // 40)
+    gap_footer = max(14, size // 20)
+    gap_title_sub = max(10, size // 28)
+    title_spacing = max(6, size // 44)
+    subtitle_spacing = max(6, size // 48)
 
     title_lines = _split_paragraphs(title_text, fonts["title"], max_text_width)
     subtitle_lines = _split_paragraphs(subtitle_text, fonts["subtitle"], max_text_width)
@@ -199,13 +199,24 @@ def create_brand_card(
     subtitle_height = _lines_height(subtitle_lines, fonts["subtitle"], subtitle_spacing)
 
     footer_height = text_height(fonts["footer"], footer_text) if footer_text else 0
-
     footer_bottom = canvas.height - margin
     footer_top = footer_bottom - footer_height if footer_height else footer_bottom
-    subtitle_bottom = footer_top - gap_footer if footer_height else footer_bottom
-    subtitle_top = subtitle_bottom - subtitle_height
-    title_bottom = subtitle_top - gap_title_sub if subtitle_lines else subtitle_bottom
-    title_top = title_bottom - title_height
+
+    has_title = bool(title_lines)
+    has_subtitle = bool(subtitle_lines)
+    stack_gap = gap_title_sub if has_title and has_subtitle else 0
+    stack_height = (title_height if has_title else 0) + stack_gap + (subtitle_height if has_subtitle else 0)
+
+    available_bottom = footer_top - gap_footer if footer_height else canvas.height - margin
+    stack_top = margin
+    if stack_height:
+        if stack_top + stack_height > available_bottom:
+            stack_top = max(margin, available_bottom - stack_height)
+    else:
+        stack_top = margin
+
+    title_top = stack_top if has_title else stack_top
+    subtitle_top = stack_top + (title_height + stack_gap if has_title else 0)
 
     draw = ImageDraw.Draw(canvas)
 
@@ -219,7 +230,7 @@ def create_brand_card(
             draw.text((brand_x + 2, brand_y + 2), brand_text, font=brand_font, fill=_shadow_color(text_color))
         draw.text((brand_x, brand_y), brand_text, font=brand_font, fill=text_color)
 
-    if title_lines:
+    if has_title:
         _draw_lines(
             draw,
             lines=title_lines,
@@ -230,7 +241,7 @@ def create_brand_card(
             shadow=shadow,
         )
 
-    if subtitle_lines:
+    if has_subtitle:
         _draw_lines(
             draw,
             lines=subtitle_lines,
